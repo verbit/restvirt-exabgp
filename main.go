@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/tidwall/gjson"
 	"github.com/verbit/restvirt-client"
@@ -90,6 +92,7 @@ func update(client *restvirt.Client, j *gjson.Result) {
 }
 
 func removeAll(client *restvirt.Client) {
+	fmt.Fprintln(os.Stderr, "Removing all routes")
 	routes, err := client.GetRoutesInNamespace(namespace)
 	if err != nil {
 		log.Fatalln(err)
@@ -100,10 +103,14 @@ func removeAll(client *restvirt.Client) {
 		if err != nil {
 			log.Fatalln(err)
 		}
+		fmt.Fprintln(os.Stderr, "Removed "+route.Destination)
 	}
 }
 
 func main() {
+	// we exit on shutdown message
+	signal.Ignore(syscall.SIGTERM)
+
 	client, err := restvirt.NewClientFromEnvironment()
 	if err != nil {
 		log.Fatalf("restvirt client error: %v\n", err)
@@ -119,6 +126,7 @@ func main() {
 			update(client, &j)
 		case j.Get("type").String() == "notification" && j.Get("notification").String() == "shutdown":
 			removeAll(client)
+			os.Exit(0)
 		}
 	}
 }
