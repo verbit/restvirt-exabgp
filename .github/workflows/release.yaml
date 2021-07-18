@@ -13,10 +13,22 @@ jobs:
         uses: actions/setup-go@v2
         with:
           go-version: 1.16
+      - name: Create tag
+        uses: actions/github-script@v4
+        with:
+          script: |
+            github.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: "refs/tags/rel-" + Math.floor(Date.now() / 1000) + '-' + context.sha.slice(0, 7),
+              sha: context.sha
+            })
+      - name: Unshallow
+        run: git fetch --prune --unshallow
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v2
         with:
           version: latest
-          args: release --snapshot --rm-dist
+          args: release --rm-dist --skip-validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
