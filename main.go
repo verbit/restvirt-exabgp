@@ -2,15 +2,18 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/tidwall/gjson"
 	"github.com/verbit/restvirt-client"
+	"github.com/verbit/restvirt-client/pb"
 )
 
 type dummy struct{}
@@ -43,7 +46,7 @@ func setDefault(m map[string]StringSet, key string, value StringSet) StringSet {
 	return value
 }
 
-var namespace = "bgp"
+var routeTableID uint32
 
 func update(client *restvirt.Client, j *gjson.Result) {
 	w := j.Get("neighbor.message.update.withdraw.ipv4 unicast.#.nlri")
@@ -61,14 +64,17 @@ func update(client *restvirt.Client, j *gjson.Result) {
 	}
 	fmt.Fprintf(os.Stderr, "= %v\n", nexthop)
 
-	routes, err := client.GetRoutesInNamespace(namespace)
+	listRoutesResponse, err := client.RouteServiceClient.ListRoutes(context.Background(), &pb.ListRoutesRequest{RouteTableId: routeTableID})
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	for _, route := range routes {
+	for _, route := range listRoutesResponse.GetRoutes() {
 		if _, ok := nexthop[route.Destination]; !ok {
-			err := client.DeleteRoute(strings.ReplaceAll(route.Destination, "/", "-"))
+			_, err := client.RouteServiceClient.DeleteRoute(context.Background(), &pb.RouteIdentifier{
+				RouteTableId: routeTableID,
+				Destination:  route.Destination,
+			})
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -80,11 +86,11 @@ func update(client *restvirt.Client, j *gjson.Result) {
 		for gateway := range hops {
 			gateways = append(gateways, gateway)
 		}
-		err := client.SetRoute(restvirt.Route{
-			Destination: dest,
-			Namespace:   namespace,
-			Gateways:    gateways,
-		})
+		_, err := client.RouteServiceClient.PutRoute(context.Background(), &pb.PutRouteRequest{Route: &pb.Route{
+			RouteTableId: routeTableID,
+			Destination:  dest,
+			Gateways:     gateways,
+		}})
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -93,13 +99,16 @@ func update(client *restvirt.Client, j *gjson.Result) {
 
 func removeAll(client *restvirt.Client) {
 	fmt.Fprintln(os.Stderr, "Removing all routes")
-	routes, err := client.GetRoutesInNamespace(namespace)
+	listRoutesResponse, err := client.RouteServiceClient.ListRoutes(context.Background(), &pb.ListRoutesRequest{RouteTableId: routeTableID})
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	for _, route := range routes {
-		err := client.DeleteRoute(strings.ReplaceAll(route.Destination, "/", "-"))
+	for _, route := range listRoutesResponse.GetRoutes() {
+		_, err := client.RouteServiceClient.DeleteRoute(context.Background(), &pb.RouteIdentifier{
+			RouteTableId: routeTableID,
+			Destination:  route.Destination,
+		})
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -110,6 +119,18 @@ func removeAll(client *restvirt.Client) {
 func main() {
 	// we exit on shutdown message
 	signal.Ignore(syscall.SIGTERM)
+
+	log.SetOutput(os.Stderr)
+
+	if len(os.Args) != 2 {
+		log.Fatalln("Usage: restvirt-exabgp <route-table-id>")
+	}
+
+	routeTableIDParsed, err := strconv.Atoi(os.Args[1])
+	if err != nil {
+		log.Fatalln("Couldn't parse route table ID")
+	}
+	routeTableID = uint32(routeTableIDParsed)
 
 	client, err := restvirt.NewClientFromEnvironment()
 	if err != nil {
